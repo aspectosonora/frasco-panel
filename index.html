@@ -236,6 +236,9 @@ async function load(){
   S.settings=S.settings||{};
   S.settings.asistente=S.settings.asistente||{nombre:'',email:''};
   S.posts.forEach(p=>{if(!p.quien)p.quien='Julio';});
+  // liga automática de carpetas de Drive por nombre de cliente (solo si están vacías)
+  S.clients.forEach(c=>{const k=normName(c.nombre);if(!c.drive&&DRIVE_FOLDERS[k])c.drive=DRIVE_FOLDERS[k];});
+  publishBoard(true);
 }
 let saveT=null;
 function save(){
@@ -243,8 +246,109 @@ function save(){
   saveT=setTimeout(async()=>{
     try{await window.storage.set(KEY,JSON.stringify(S));}
     catch(e){console.error('No se pudo guardar',e);}
+    publishBoard();
   },300);
 }
+
+/* ================= EQUIPO ================= */
+const DRIVE_ROOT='https://drive.google.com/drive/folders/1wO1X0xnGgsD-6rz8EDR1df_LARA-ARwr';
+const DRIVE_FOLDERS={
+  'MARIKO MUSIC CENTER':'https://drive.google.com/drive/folders/1wdtrX8EHBkrsgBo_MZipKvgcbKCCQEj0',
+  'JMT GUITARS':'https://drive.google.com/drive/folders/1giFaXKWA2k8sDkGzIG_zDiao2_Jhlhw-',
+  'ACADEMIA MARIKO MUSIC SCHOOL':'https://drive.google.com/drive/folders/1JEh6nSyOyGOSDoSayC9uDiOLDE9B_yuE',
+  'INTER SOLUCIONES':'https://drive.google.com/drive/folders/1IKLXrKTcQw-15TJCnC9IGmJln7iCaEQT',
+  'DR. CARLOS ADAME':'https://drive.google.com/drive/folders/1DkDJ5KlierseNay2EpzWyCNPZe3tuIGJ',
+  'DR. FERNANDO ADAME':'https://drive.google.com/drive/folders/1NYWyCJBU4mBJp4I2FDd2FoyPd7XvJbsE',
+  'VORTEX':'https://drive.google.com/drive/folders/1WwZgDfPqdpFcnt35QkdJxPlCnfAkA_xa',
+  'THE CAPITAL SALAD':'https://drive.google.com/drive/folders/1ErQmQ9PjH39r47l7V1ef8BrWKdp3fhnf',
+  'INSTITUTO WASHINGTON':'https://drive.google.com/drive/folders/1pGCpRx7uHIdXAija9tb9vdJ2bd79TN5r',
+  'LA CARZINA':'https://drive.google.com/drive/folders/1q6nISIEG_7JD9W9yiouSvh6MvrqSVs6X',
+  'MANENA':'https://drive.google.com/drive/folders/1MIKBSQj7r97dd4vKPqsQom5V8vd4kdKQ'
+};
+function normName(s){return String(s||'').trim().toUpperCase();}
+const VID_LABELS={sin_material:'Falta grabar',grabado:'Grabado',edicion:'En edición',revision:'Para revisar',aprobado:'Aprobado',corregir:'Con cambios'};
+const VID_CLASS={sin_material:'vencido',grabado:'aprobado',edicion:'pendiente',revision:'publicado',aprobado:'pagado',corregir:'vencido'};
+function astName(){return S&&S.settings&&S.settings.asistente&&S.settings.asistente.nombre||'';}
+function esDeEquipo(p){return !!astName()&&p.quien===astName();}
+function vEst(id){return (window.TEAM_E||{})[id]||{};}
+function vChip(p){
+  if(!esDeEquipo(p))return '';
+  const e=vEst(p.id);const s=e.estado;
+  return `<span class="chip ${s?VID_CLASS[s]:'idea'}" title="${e.nota?esc(e.nota):''}" style="cursor:default"><span class="dot"></span>🎥 ${s?VID_LABELS[s]:'Sin empezar'}</span>`;
+}
+// Solo lo que el equipo necesita: nada de precios, cobros, paquetes ni notas internas.
+function buildBoard(){
+  const ast=astName();
+  const desde=new Date(getMonday(new Date()));desde.setDate(desde.getDate()-14);const desdeIso=iso(desde);
+  const tareas=ast?S.posts.filter(p=>p.quien===ast&&p.week>=desdeIso).map(p=>{
+    const g=S.guiones.find(x=>x.postId===p.id);
+    return {id:p.id,clientId:p.clientId,week:p.week,dia:p.dia,hora:p.hora??null,diaPub:p.diaPub??null,titulo:p.titulo,tipo:p.tipo,
+      guion:g?{titulo:g.titulo||'',hook:g.hook||'',des:g.des||'',cta:g.cta||'',loc:g.loc||'',props:g.props||'',dur:g.dur||''}:null};
+  }):[];
+  const clientes=S.clients.map(c=>{const m=c.marca||{};return {id:c.id,nombre:c.nombre,color:c.color,giro:c.giro||'',redes:c.redes||'',drive:c.drive||'',
+    marca:{desc:m.desc||'',publico:m.publico||'',tono:m.tono||'',colores:m.colores||'',tipo:m.tipo||'',estrella:m.estrella||'',evitar:m.evitar||''}};});
+  return {asistente:ast,driveRoot:DRIVE_ROOT,clientes,tareas,updated:Date.now()};
+}
+let lastBoard='';
+function publishBoard(force){
+  if(!window.teamAPI||!S)return;
+  const b=buildBoard();const sig=JSON.stringify({...b,updated:0});
+  if(!force&&sig===lastBoard)return;
+  lastBoard=sig;
+  window.teamAPI.publish(b).catch(e=>console.error('No se publicó el tablero del equipo',e));
+}
+async function aprobarVideo(id){
+  try{await window.teamAPI.setEstado(id,{estado:'aprobado',at:Date.now(),by:'julio'});toast('Video aprobado ✓');}
+  catch(e){toast('No se guardó');}
+}
+function openCambios(id){
+  const p=S.posts.find(x=>x.id===id);
+  modal(`<h3>Pedir cambios</h3>
+  <div class="meta" style="margin-bottom:12px;color:var(--muted)">${esc(p?p.titulo:'')}</div>
+  <div class="field"><label>Qué tiene que corregir</label><textarea id="m_cambios" rows="3" placeholder="ej. bajar música, cortar los primeros 3 segundos, cambiar el texto final"></textarea></div>
+  <div style="display:flex;gap:10px;justify-content:flex-end">
+    <button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="enviarCambios('${id}')">Enviar a ${esc(astName())}</button>
+  </div>`);
+}
+async function enviarCambios(id){
+  const t=document.getElementById('m_cambios').value.trim();if(!t){toast('Escribe qué cambiar');return;}
+  try{await window.teamAPI.setEstado(id,{estado:'corregir',notaJulio:t,at:Date.now(),by:'julio'});closeModal();toast('Cambios enviados');}
+  catch(e){toast('No se guardó');}
+}
+function propuestaToCal(id,quien){
+  const x=(window.TEAM_P||{})[id];if(!x)return;
+  S.posts.push({id:uid(),clientId:x.clientId,week:iso(getMonday(new Date())),dia:0,hora:null,diaPub:0,titulo:x.titulo,tipo:(x.formato||'Reel').split('|')[0],estado:'idea',quien});
+  save();window.teamAPI.delPropuesta(id).catch(()=>{});toast('Agregada al calendario (lunes, como idea)');
+}
+function descartarPropuesta(id){window.teamAPI.delPropuesta(id).then(()=>toast('Propuesta descartada')).catch(()=>toast('No se pudo descartar'));}
+function cardEquipo(){
+  const ast=astName();if(!ast)return '';
+  const wk=iso(getMonday(new Date()));
+  const suyas=S.posts.filter(p=>p.week===wk&&p.quien===ast);
+  const grabar=suyas.filter(p=>vEst(p.id).estado==='sin_material');
+  const revisar=suyas.filter(p=>vEst(p.id).estado==='revision');
+  const listos=suyas.filter(p=>vEst(p.id).estado==='aprobado').length;
+  const props=Object.keys(window.TEAM_P||{}).length;
+  const fila=(p,extra)=>{const c=client(p.clientId);const e=vEst(p.id);return `<div class="row">
+    <div style="display:flex;gap:10px;align-items:center"><span class="client-dot" style="background:${c?c.color:'#555'}"></span>
+    <div><div>${esc(p.titulo)}</div><div class="meta">${c?esc(c.nombre):''} · ${DIAS[p.dia]}${e.nota?' · “'+esc(e.nota)+'”':''}</div></div></div>${extra||''}</div>`;};
+  return `<div class="card" style="margin-top:14px;border-color:${grabar.length?'#5a241d':'var(--line)'}">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+      <h3 style="margin:0">Equipo · ${esc(ast)}</h3>
+      <span class="meta" style="color:var(--muted);font-size:12px">${suyas.length} videos esta semana · ${listos} aprobados${props?` · <a href="#" onclick="document.querySelector('nav button[data-v=ideas]').click();return false" style="color:var(--lime)">${props} ${props===1?'propuesta':'propuestas'} de ideas</a>`:''}</span>
+    </div>
+    ${grabar.length?`<div class="label" style="color:var(--rojo);margin-top:10px">Hay que grabar</div>${grabar.map(p=>fila(p)).join('')}`:''}
+    ${revisar.length?`<div class="label" style="color:var(--lime);margin-top:12px">Listos para que los revises</div>${revisar.map(p=>fila(p,`<div style="display:flex;gap:6px"><button class="btn ghost sm" onclick="openCambios('${p.id}')">Pedir cambios</button><button class="btn sm" onclick="aprobarVideo('${p.id}')">Aprobar</button></div>`)).join('')}`:''}
+    ${!grabar.length&&!revisar.length?`<div class="empty">${suyas.length?'Nada pendiente de tu lado: ni grabaciones ni revisiones.':'Sin videos asignados a '+esc(ast)+' esta semana. Asígnalos en Calendario con Responsable: '+esc(ast)+'.'}</div>`:''}
+  </div>`;
+}
+window.addEventListener('frasco-team',()=>{
+  if(!S)return;
+  const a=document.activeElement;if(a&&['INPUT','TEXTAREA','SELECT'].includes(a.tagName))return;
+  if(document.getElementById('modalRoot').innerHTML)return;
+  if(['hoy','calendario','ideas'].includes(view))render();
+});
 
 /* ================= UTILS ================= */
 function getMonday(d){d=new Date(d);const day=(d.getDay()+6)%7;d.setDate(d.getDate()-day);d.setHours(0,0,0,0);return d;}
@@ -338,7 +442,8 @@ function rHoy(){
     <div class="card"><div class="label">Publicaciones pendientes esta semana</div><div class="big">${pend.length}</div><div class="meta" style="color:var(--muted);font-size:12px;margin-top:4px">Meta semanal: ${metaSemanal} publicaciones · ${horasSemana}h de producción (capacidad: 45h con sábado)</div></div>
     <div class="card"><div class="label">Por cobrar este mes</div><div class="big">${fmtMoney(montoPC)} <small>MXN</small></div><div class="meta" style="color:var(--muted);font-size:12px;margin-top:4px">${porCobrarL.length} cobros pendientes · toca Cobros para el detalle</div></div>
   </div>
-  <div class="grid g2">
+  ${cardEquipo()}
+  <div class="grid g2" style="margin-top:14px">
     <div class="card">
       <h3>Mi día — bloques de trabajo</h3>
       <div class="bar"><i style="width:${Math.min(100,hrsDone/8*100)}%"></i></div>
@@ -396,6 +501,7 @@ function rHoy(){
           <div><div style="${done?'text-decoration:line-through':''}">${esc(p.titulo)}</div><div class="meta">${c?esc(c.nombre):''} · ${esc(p.tipo)} · ${durOf(p)}h${p.quien&&p.quien!=='Julio'?' · 👤'+esc(p.quien):''}</div></div></div>
           <div style="display:flex;gap:6px;align-items:center">
             ${(g=>g?`<button class="btn ghost sm" onclick="openGuionVer('${g.id}')">📜</button>`:'')(S.guiones.find(g=>g.postId===p.id))}
+            ${vChip(p)}
             <span class="chip ${p.estado}" onclick="cyclePost('${p.id}')"><span class="dot"></span>${POST_LABELS[p.estado]}</span>
             <button class="iconbtn" style="color:${done?'var(--lime)':'var(--muted)'};font-size:17px" onclick="toggleDone('${p.id}')" aria-label="Marcar lista">✓</button>${done?`<button class="iconbtn" style="font-size:11px" onclick="openTiempoModal('${p.id}')" aria-label="Tiempo real">⏱${realOf(p)}h</button>`:''}
           </div>
@@ -601,6 +707,7 @@ function rCal(){
             <div class="meta" style="margin-bottom:5px">${p.hora!=null?'<b style=\'color:var(--lime)\'>'+fmtHora(p.hora)+'</b> · ':''}${c?esc(c.nombre):''} · ${esc(p.tipo)} · ${durOf(p)}h${p.quien&&p.quien!=='Julio'?' · 👤'+esc(p.quien):''}</div>
             ${p.diaPub!=null?`<div class="meta" style="margin-bottom:5px;color:${p.hora!=null&&p.dia>p.diaPub?'var(--ambar)':'var(--muted)'}">📤 Publica ${DIAS[p.diaPub]}</div>`:''}
             <span class="chip ${p.estado}" onclick="cyclePost('${p.id}')"><span class="dot"></span>${POST_LABELS[p.estado]}</span>
+            ${vChip(p)?'<div style="margin-top:5px">'+vChip(p)+'</div>':''}
             ${(g=>g?`<button class="btn ghost sm" style="margin-top:6px;width:100%" onclick="openGuionVer('${g.id}')">📜 Guion</button>`:'')(S.guiones.find(g=>g.postId===p.id))}
           </div>`;}).join('')}
       </div>`;}).join('')}
@@ -988,7 +1095,19 @@ function rIdeas(){
     </div>
     <button class="btn" id="i_btn" style="margin-top:14px" onclick="genIdeas()">Generar 5 ideas</button>
   </div>
-  <div id="ideasOut">${lastIdeas.map((x,i)=>ideaCard(x,i)).join('')}</div>`;
+  <div id="ideasOut">${lastIdeas.map((x,i)=>ideaCard(x,i)).join('')}</div>
+  ${(()=>{const ps=Object.entries(window.TEAM_P||{}).sort((a,b)=>b[1].at-a[1].at);if(!ps.length)return '';
+    return `<h3 style="margin-top:22px">Propuestas de ${esc(astName()||'tu equipo')} (${ps.length})</h3>
+    ${ps.map(([id,x])=>{const c=client(x.clientId);return `<div class="idea-card">
+      <span class="tag">${esc(x.formato)}</span> <span class="meta" style="color:var(--muted);font-size:12px">${c?esc(c.nombre):''}</span>
+      <h4>${esc(x.titulo)}</h4>
+      <p><b style="color:var(--cream)">Gancho:</b> ${esc(x.gancho)}</p>
+      <p style="margin-top:4px">${esc(x.descripcion)}</p>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn sm" onclick="propuestaToCal('${id}',astName())">Al calendario de ${esc(astName())}</button>
+        <button class="btn ghost sm" onclick="propuestaToCal('${id}','Julio')">Al mío</button>
+        <button class="btn ghost sm" onclick="descartarPropuesta('${id}')">Descartar</button>
+      </div></div>`;}).join('')}`;})()}`;
 }
 function ideaCard(x,i){
   return `<div class="idea-card">
@@ -1079,7 +1198,7 @@ function openSettings(){
     <div class="field"><label>Correo (su login)</label><input id="m_astE" value="${S.settings.asistente?esc(S.settings.asistente.email):''}" placeholder="correo@..."></div>
   </div>
   <div class="field"><label>Horas por semana del asistente</label><input id="m_astH" type="number" value="${S.settings.capacidadAsistente||20}" style="max-width:120px"></div>
-  <div class="meta" style="font-size:12px;color:var(--muted);margin-bottom:12px">Crea su usuario en Firebase con ese correo. Cuando entre, solo verá su agenda y el calendario: sin precios, cobros ni clientes.</div>
+  <div class="meta" style="font-size:12px;color:var(--muted);margin-bottom:12px">Entra en panel.frascocreativeoffice.com con su propio usuario y ve solo su panel de producción: sus videos de la semana, carpetas de Drive, la línea de cada marca e Ideas IA. Nunca ve precios, cobros, números ni puede editar clientes. Las publicaciones que le asignes (Responsable: su nombre) le aparecen al instante.</div>
   <div class="label" style="margin:14px 0 8px">Respaldo de toda la operación</div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
     <button class="btn ghost sm" onclick="descargarRespaldo()">⬇ Descargar respaldo</button>
@@ -1112,7 +1231,8 @@ window.addEventListener('frasco-ready',()=>{load().then(render);});
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot, updateDoc, deleteField } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+const OWNER_EMAIL='yuliushc@gmail.com';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCMOorpDurNhs7b28buNM1v_YNNdSBdgNk",
@@ -1139,12 +1259,26 @@ window.storage = {
   }
 };
 window.frascoLogout = ()=>signOut(auth).then(()=>location.reload());
+window.TEAM_E={};window.TEAM_P={};
+window.teamAPI = {
+  publish:(data)=>setDoc(doc(db,'equipo','board'),data),
+  setEstado:(id,obj)=>setDoc(doc(db,'equipo','estados'),{e:{[id]:obj}},{merge:true}),
+  delPropuesta:(id)=>updateDoc(doc(db,'equipo','propuestas'),{['p.'+id]:deleteField()})
+};
+let teamSubs=false;
+function escucharEquipo(){
+  if(teamSubs)return;teamSubs=true;
+  onSnapshot(doc(db,'equipo','estados'),s=>{window.TEAM_E=(s.exists()&&s.data().e)||{};window.dispatchEvent(new Event('frasco-team'));},e=>console.error(e));
+  onSnapshot(doc(db,'equipo','propuestas'),s=>{window.TEAM_P=(s.exists()&&s.data().p)||{};window.dispatchEvent(new Event('frasco-team'));},e=>console.error(e));
+}
 
 const lg = document.getElementById('loginScreen');
 onAuthStateChanged(auth,(user)=>{
   if(user){
+    if((user.email||'').toLowerCase()!==OWNER_EMAIL){location.replace('/equipo.html');return;}
     lg.style.display='none';
     window.dispatchEvent(new Event('frasco-ready'));
+    escucharEquipo();
   } else {
     lg.style.display='flex';
   }
